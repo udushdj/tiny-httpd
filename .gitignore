@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+build-arm/
+*.o
+*.a
+*.so
+*.dylib
+
+# Executables
+tiny-httpd
+stress_test
+stress-test
+webbench
+test/stress-test
+test/webbench
+www/cgi-bin/test
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/

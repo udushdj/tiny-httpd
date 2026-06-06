@@ -1,0 +1,33 @@
+#!/bin/bash
+# API CGI — 处理 POST 写入患者队列和统计数据
+#   POST /cgi-bin/api              → 写入 patient_queue.json
+#   POST /cgi-bin/api?target=stats → 写入 stats.json
+
+BODY=$(cat)
+if [ -z "$BODY" ]; then
+    printf "Content-Type: application/json\r\n\r\n"
+    printf '{"error":"empty body"}'
+    exit 1
+fi
+
+# 确定写入目标
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WWW_DIR="$(dirname "$SCRIPT_DIR")"
+
+if [ "$QUERY_STRING" = "target=stats" ]; then
+    DST="$WWW_DIR/stats.json"
+else
+    DST="$WWW_DIR/patient_queue.json"
+fi
+
+# 写入文件
+echo "$BODY" > "$DST"
+rc=$?
+
+if [ $rc -eq 0 ]; then
+    printf "Content-Type: application/json\r\n\r\n"
+    printf '{"success":true}'
+else
+    printf "Content-Type: application/json\r\n\r\n"
+    printf '{"error":"write failed"}'
+fi

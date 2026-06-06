@@ -30,7 +30,8 @@ check "GET style.css"  200 "$BASE/style.css"
 check "GET 不存在文件"  404 "$BASE/nonexistent"
 
 echo "[路径安全]"
-check "路径穿越拒绝" 403 "$BASE/../../../etc/passwd"
+# 使用 %2e%2e URL 编码的 .. 避免 curl 自动规范化路径
+check "路径穿越拒绝" 403 "$BASE/%2e%2e/%2e%2e/%2e%2e/etc/passwd"
 
 echo "[CGI GET]"
 check "CGI hello.py" 200 "$BASE/cgi-bin/hello.py?name=test"
