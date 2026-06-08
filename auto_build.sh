@@ -57,10 +57,12 @@ build_cgi() {
 # ──── 部署 ────
 deploy() {
     build_arm
+    # 确保OTA目录存在
+    mkdir -p www/ota
     echo "=== 部署到开发板 $BOARD_IP ==="
     scp "$BUILD_DIR-arm/$TARGET" "root@${BOARD_IP}:${BOARD_DIR}/"
     scp -r www "root@${BOARD_IP}:${BOARD_DIR}/"
-    echo "部署完成"
+    echo "部署完成 (含OTA目录)"
 }
 
 # ──── 清理 ────

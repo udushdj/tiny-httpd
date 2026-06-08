@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <strings.h>
+#include <sys/sendfile.h>
 #include "server.h"
 
 conn_t *g_conns[MAX_CONN];
@@ -470,7 +471,37 @@ void exec_cgi(int epfd, conn_t *c, const char *script_path)
  *   - CGI 路由先 access(X_OK) 验证，404 vs 403 区分不存在和无权限
  *   - 静态文件路由 realpath() 解析后前缀匹配 g_docroot，防御 ../ 穿越
  *   - POST 到非 CGI 路径返回 405 Method Not Allowed
+ *   - /ota/ 路由使用 sendfile() 流式传输，支持大于 BUF_SIZE 的文件
  */
+
+/* 大文件流式发送 —— 突破 BUF_SIZE 限制 */
+static void serve_ota(int epfd, conn_t *c, const char *filepath, struct stat *st)
+{
+    int fd = open(filepath, O_RDONLY);
+    if (fd == -1) { send_error(epfd, c, 404, "Not Found"); return; }
+
+    int hlen = snprintf(c->wbuf, BUF_SIZE,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Content-Length: %ld\r\n"
+        "Connection: close\r\n"
+        "Server: tiny-httpd/0.4\r\n"
+        "\r\n", (long)st->st_size);
+    if (hlen < 0 || hlen >= BUF_SIZE) {
+        close(fd); send_error(epfd, c, 500, "Internal Server Error"); return;
+    }
+
+    c->wlen       = hlen;
+    c->wpos       = 0;
+    c->file_fd    = fd;
+    c->file_offset = 0;
+    c->file_size  = st->st_size;
+    c->state      = STATE_WRITING;
+    mod_epoll(epfd, c, EPOLLOUT);
+
+    printf("[OTA] serving %s (%ld bytes)\n", filepath, (long)st->st_size);
+}
+
 void route_request(int epfd, conn_t *c)
 {
     /* /api/status */
@@ -485,6 +516,29 @@ void route_request(int epfd, conn_t *c)
     else {
         strncpy(uri, c->request.uri, sizeof(uri) - 1);
         uri[sizeof(uri) - 1] = '\0';
+    }
+
+    /* OTA 大文件路由 —— 使用 sendfile 流式传输 */
+    if (strncmp(uri, "/ota/", 5) == 0) {
+        if (c->request.method != HTTP_GET) {
+            send_error(epfd, c, 405, "Method Not Allowed");
+            return;
+        }
+        char ota_path[2048];
+        snprintf(ota_path, sizeof(ota_path), "%s%s", g_docroot, uri);
+        char resolved[2048];
+        if (realpath(ota_path, resolved) == NULL ||
+            strncmp(resolved, g_docroot, strlen(g_docroot)) != 0) {
+            send_error(epfd, c, 404, "Not Found");
+            return;
+        }
+        struct stat st;
+        if (stat(resolved, &st) == -1 || !S_ISREG(st.st_mode)) {
+            send_error(epfd, c, 404, "Not Found");
+            return;
+        }
+        serve_ota(epfd, c, resolved, &st);
+        return;
     }
 
     /* CGI 路由 */
@@ -599,6 +653,7 @@ void handle_accept(int epfd, int listen_fd)
         c->fd          = fd;
         c->state       = STATE_READING;
         c->last_active = time(NULL);
+        c->file_fd     = -1;
         http_parser_init(&c->parser);
 
         /* 将新连接注册到全局连接表 */
@@ -673,14 +728,36 @@ void handle_write(int epfd, conn_t *c)
 {
     c->last_active = time(NULL);
 
-    int n = write(c->fd, c->wbuf + c->wpos, c->wlen - c->wpos);
-
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return;  /* 发送缓冲区满 */
-        perror("write"); close_conn(epfd, c); return;
+    /* 先发送 wbuf 中的 HTTP 头 */
+    if (c->wpos < c->wlen) {
+        int n = write(c->fd, c->wbuf + c->wpos, c->wlen - c->wpos);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            perror("write"); close_conn(epfd, c); return;
+        }
+        c->wpos += n;
+        if (c->wpos < c->wlen) return;  /* 头还没发完，等下次 EPOLLOUT */
     }
-    c->wpos += n;
-    if (c->wpos >= c->wlen) close_conn(epfd, c);   /* 全部发送完毕 */
+
+    /* 头发送完毕，检查是否有文件需要继续发送 */
+    if (c->file_fd >= 0 && c->file_offset < c->file_size) {
+        off_t remaining = c->file_size - c->file_offset;
+        ssize_t n = sendfile(c->fd, c->file_fd, &c->file_offset, remaining > 65536 ? 65536 : remaining);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            perror("sendfile"); close_conn(epfd, c); return;
+        }
+        if (c->file_offset >= c->file_size) {
+            /* 文件发送完毕 */
+            close(c->file_fd);
+            c->file_fd = -1;
+            close_conn(epfd, c);
+        }
+        return;
+    }
+
+    /* 无文件待发送，直接关闭 */
+    close_conn(epfd, c);
 }
 
 /*
@@ -699,6 +776,12 @@ void handle_write(int epfd, conn_t *c)
  */
 void close_conn(int epfd, conn_t *c)
 {
+    /* 关闭正在发送的文件 */
+    if (c->file_fd >= 0) {
+        close(c->file_fd);
+        c->file_fd = -1;
+    }
+
     if (c->state == STATE_CGI) {
         /* CGI 状态：epoll 注册的是管道 fd */
         if (c->cgi_fd > 0) {

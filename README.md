@@ -3,12 +3,84 @@
 轻量级 HTTP/1.1 服务器与 CGI 引擎，基于 epoll 事件驱动架构。
 支持静态文件服务、CGI 动态请求、日志系统、连接超时管理。
 
+**应用场景**：作为LVGL医疗叫号系统的后端服务器，提供患者队列JSON接口和统计数据接口。
+
 ## 运行拓扑
 
 ```
 客户端 (curl/浏览器)  ──HTTP请求──→  tiny-httpd (服务器)
                         ←──HTTP响应──    -p 8080
+
+LVGL医疗叫号板        ──GET /patient_queue.json──→ tiny-httpd ──→ www/patient_queue.json
+                      ←──application/json───────
+
+远程管理端            ──POST /cgi-bin/api────────→ tiny-httpd ──→ 写入JSON文件
+(patient.html)        ←──200 OK─────────────────
 ```
+
+## 与LVGL叫号系统的集成
+
+### JSON数据接口
+
+| 接口 | 方法 | 说明 | 数据来源 |
+|------|------|------|----------|
+| `/patient_queue.json` | GET | 返回患者队列JSON数组 | `www/patient_queue.json` 静态文件 |
+| `/stats.json` | GET | 返回统计数据JSON对象 | `www/stats.json` 静态文件 |
+| `/cgi-bin/api` | POST | 写入患者队列数据 | CGI脚本覆盖JSON文件 |
+| `/cgi-bin/api?target=stats` | POST | 写入统计数据 | CGI脚本覆盖JSON文件 |
+| `/api/status` | GET | 服务器运行状态（连接数/QPS/uptime） | 内存计数器 |
+
+### patient_queue.json 格式
+
+```json
+[
+  {
+    "Patient_ID": 1001,
+    "name": "王x",
+    "ID_number": "440101199001011234",
+    "age": 35
+  }
+]
+```
+
+### stats.json 格式
+
+```json
+{
+  "today_called": 23,
+  "avg_wait_min": 15,
+  "hourly_calls": [0, 2, 4, 5, 3, 1, 3, 2],
+  "recent_events": [
+    {"id": 1008, "name": "周八", "start_time": "09:30", "end_time": "09:42",
+     "date": "2026-06-01", "duration_min": 12}
+  ]
+}
+```
+
+### CGI写入脚本 (`www/cgi-bin/api`)
+
+```bash
+#!/bin/bash
+# POST /cgi-bin/api              → 写入 patient_queue.json
+# POST /cgi-bin/api?target=stats → 写入 stats.json
+read -r QUERY
+TARGET=$(echo "$QUERY" | sed -n 's/.*target=\([^& ]*\).*/\1/p')
+BODY=$(cat)
+if [ "$TARGET" = "stats" ]; then
+    DST="stats.json"
+else
+    DST="patient_queue.json"
+fi
+echo "$BODY" > "$DST"
+echo "Content-Type: text/plain"
+echo ""
+echo "OK: written to $DST"
+```
+
+### 文件大小限制
+
+服务端 `serve_file()` 输出缓冲区为8KB（`BUF_SIZE`）。JSON文件超过~8KB会被截断。
+**当前患者队列10人+统计数据均远小于8KB，不影响正常运行。**
 
 ## 快速开始
 

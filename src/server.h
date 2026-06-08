@@ -109,6 +109,11 @@ struct conn_t {
                                    reap_zombies() 回收                 */
     char  cgi_output[BUF_SIZE];  /* CGI 子进程 stdout 输出缓冲区        */
     int   cgi_olen;              /* CGI 输出实际字节数                  */
+
+    /* ── 大文件发送上下文 (OTA等) ── */
+    int   file_fd;                /* 正在发送的文件描述符，-1表示无      */
+    off_t file_offset;            /* 已发送字节数                        */
+    off_t file_size;              /* 文件总大小                          */
 };
 
 /* ═══════════════════════════════════════════════════════════════
