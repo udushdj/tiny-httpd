@@ -183,3 +183,15 @@ rsync -av --delete /mnt/c/Users/46499/Desktop/轻量化http服务器CGI引擎/ ~
 ## License
 
 MIT
+
+---
+
+## 作者与职责
+
+- **作者**：吴振
+- **定位**：多线程 HTTP/1.1 服务器与 CGI 引擎（Linux 应用层方向核心项目）
+- **本人负责**：整体架构设计与全部实现
+  - epoll + SO_REUSEPORT + pthread 线程池的高并发模型
+  - HTTP 请求解析（GET / POST）、MIME 静态文件服务与 CGI 动态请求（fork + exec + 管道）
+  - /api/status 监控接口、连接超时、僵尸进程回收与日志轮转
+  - arm-linux-gcc 交叉编译并部署至 ARM aarch64 开发板
